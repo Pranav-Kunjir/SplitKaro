@@ -6,7 +6,7 @@ import { Suspense } from "react"
 
 import SearchUser from "@/components/ui/search-user"
 import FetchRequest from "@/components/fetchrequest"
-import FriendsSidebar from "@/components/friends-sidebar"
+import FriendsSidebar from "@/components/sidebar"
 
 export default function Home() {
   return (
