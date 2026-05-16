@@ -1,12 +1,13 @@
 import { EnvVarWarning } from "@/components/env-var-warning"
 import { AuthButton } from "@/components/auth-button"
 import { hasEnvVars } from "@/lib/utils"
-
-import { Suspense } from "react"
-
+import { Suspense} from "react"
+import ChatInputWrapper from "@/components/chat-input-wrapper"
 import SearchUser from "@/components/ui/search-user"
 import FetchRequest from "@/components/fetchrequest"
 import FriendsSidebar from "@/components/sidebar"
+
+
 
 export default function Home() {
   return (
@@ -36,8 +37,8 @@ export default function Home() {
         {/* Main Content */}
         <div className="flex-1 p-6 space-y-6">
           <SearchUser />
-
           <FetchRequest />
+          <ChatInputWrapper />
         </div>
       </div>
     </main>
