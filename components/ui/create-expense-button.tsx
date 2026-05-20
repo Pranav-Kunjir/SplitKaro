@@ -23,8 +23,21 @@ type User = {
 type SplitPreview = {
   userId: string;
   label: string;
+  percentage: number;
   amount: number;
 };
+
+function buildEqualPercentages(memberIds: string[]) {
+  if (memberIds.length === 0) return {};
+
+  const basePercentCents = Math.floor(10000 / memberIds.length);
+  const remainder = 10000 % memberIds.length;
+
+  return memberIds.reduce<Record<string, number>>((percentages, memberId, index) => {
+    percentages[memberId] = (basePercentCents + (index < remainder ? 1 : 0)) / 100;
+    return percentages;
+  }, {});
+}
 
 export default function CreateExpenseButton({
   chatId,
@@ -34,6 +47,9 @@ export default function CreateExpenseButton({
   const [title, setTitle] = useState("");
   const [amount, setAmount] = useState("");
   const [members, setMembers] = useState<User[]>([]);
+  const [splitPercentages, setSplitPercentages] = useState<Record<string, number>>(
+    {},
+  );
   const [membersLoading, setMembersLoading] = useState(false);
   const [saving, setSaving] = useState(false);
 
@@ -62,6 +78,7 @@ export default function CreateExpenseButton({
 
       if (memberIds.length === 0) {
         setMembers([]);
+        setSplitPercentages({});
         setMembersLoading(false);
         return;
       }
@@ -80,6 +97,7 @@ export default function CreateExpenseButton({
             email: null,
           })),
         );
+        setSplitPercentages(buildEqualPercentages(memberIds));
         setMembersLoading(false);
         return;
       }
@@ -95,9 +113,10 @@ export default function CreateExpenseButton({
               id: memberId,
               name: null,
               email: null,
-            },
+          },
         ),
       );
+      setSplitPercentages(buildEqualPercentages(memberIds));
       setMembersLoading(false);
     }
 
@@ -107,28 +126,85 @@ export default function CreateExpenseButton({
   const parsedAmount = Number(amount);
 
   const splitPreview = useMemo<SplitPreview[]>(() => {
-    if (!Number.isFinite(parsedAmount) || parsedAmount <= 0) return [];
     if (members.length === 0) return [];
 
-    const totalCents = Math.round(parsedAmount * 100);
-    const baseCents = Math.floor(totalCents / members.length);
-    const remainder = totalCents % members.length;
+    const totalCents = Number.isFinite(parsedAmount) && parsedAmount > 0
+      ? Math.round(parsedAmount * 100)
+      : 0;
+
+    const splitCents = members.map((member, index) => {
+      const percentCents = Math.round((splitPercentages[member.id] || 0) * 100);
+      const rawCents = (totalCents * percentCents) / 10000;
+
+      return {
+        index,
+        cents: Math.floor(rawCents),
+        remainder: rawCents - Math.floor(rawCents),
+      };
+    });
+
+    const assignedCents = splitCents.reduce(
+      (total, split) => total + split.cents,
+      0,
+    );
+    const centsLeft = totalCents - assignedCents;
+
+    [...splitCents]
+      .sort((firstSplit, secondSplit) => secondSplit.remainder - firstSplit.remainder)
+      .slice(0, centsLeft)
+      .forEach((split) => {
+        splitCents[split.index].cents += 1;
+      });
 
     return members.map((member, index) => {
-      const memberCents = baseCents + (index < remainder ? 1 : 0);
-
       return {
         userId: member.id,
         label: member.name || member.email || member.id,
-        amount: memberCents / 100,
+        percentage: splitPercentages[member.id] || 0,
+        amount: splitCents[index].cents / 100,
       };
     });
-  }, [members, parsedAmount]);
+  }, [members, parsedAmount, splitPercentages]);
+
+  const percentageTotal = useMemo(() => {
+    return members.reduce(
+      (total, member) => total + (splitPercentages[member.id] || 0),
+      0,
+    );
+  }, [members, splitPercentages]);
+
+  function updateSplitPercentage(memberId: string, value: string) {
+    const numericValue = Number(value);
+    const nextPercentCents = Math.min(
+      10000,
+      Math.max(0, Math.round((Number.isFinite(numericValue) ? numericValue : 0) * 100)),
+    );
+    const otherMembers = members.filter((member) => member.id !== memberId);
+
+    if (otherMembers.length === 0) {
+      setSplitPercentages({ [memberId]: 100 });
+      return;
+    }
+
+    const remainingPercentCents = 10000 - nextPercentCents;
+    const basePercentCents = Math.floor(remainingPercentCents / otherMembers.length);
+    const remainder = remainingPercentCents % otherMembers.length;
+
+    setSplitPercentages({
+      [memberId]: nextPercentCents / 100,
+      ...otherMembers.reduce<Record<string, number>>((percentages, member, index) => {
+        percentages[member.id] =
+          (basePercentCents + (index < remainder ? 1 : 0)) / 100;
+        return percentages;
+      }, {}),
+    });
+  }
 
   function closeModal() {
     setOpen(false);
     setTitle("");
     setAmount("");
+    setSplitPercentages({});
   }
 
   async function createExpense() {
@@ -244,13 +320,29 @@ export default function CreateExpenseButton({
                     <p className="p-2 text-sm text-muted-foreground">
                       Loading members...
                     </p>
-                  ) : splitPreview.length > 0 ? (
+                  ) : members.length > 0 ? (
                     splitPreview.map((split) => (
                       <div
                         key={split.userId}
-                        className="flex items-center justify-between gap-3 rounded-lg px-3 py-2"
+                        className="grid grid-cols-[1fr_88px_72px] items-center gap-3 rounded-lg px-3 py-2"
                       >
                         <p className="truncate text-sm">{split.label}</p>
+                        <div className="relative">
+                          <input
+                            type="number"
+                            min="0"
+                            max="100"
+                            step="0.01"
+                            value={split.percentage.toFixed(2)}
+                            onChange={(event) =>
+                              updateSplitPercentage(split.userId, event.target.value)
+                            }
+                            className="w-full rounded-lg border bg-background py-1.5 pl-2 pr-6 text-right text-sm outline-none focus:ring-2 focus:ring-primary"
+                          />
+                          <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">
+                            %
+                          </span>
+                        </div>
                         <p className="shrink-0 text-sm font-medium">
                           {split.amount.toFixed(2)}
                         </p>
@@ -258,10 +350,15 @@ export default function CreateExpenseButton({
                     ))
                   ) : (
                     <p className="p-2 text-sm text-muted-foreground">
-                      Enter an amount to preview each member&apos;s split.
+                      No members found for this chat.
                     </p>
                   )}
                 </div>
+                {members.length > 0 && (
+                  <p className="mt-2 text-xs text-muted-foreground">
+                    Total: {percentageTotal.toFixed(2)}%
+                  </p>
+                )}
               </div>
             </div>
 
