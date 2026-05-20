@@ -1,6 +1,7 @@
 "use client"
 
 import { createClient } from "@/lib/supabase/client"
+import CreateExpenseButton from "./create-expense-button"
 
 export default function MessageInput({ chatId, userId }: { chatId: string | null; userId: string | null }) {
     const supabase = createClient()
@@ -28,6 +29,7 @@ export default function MessageInput({ chatId, userId }: { chatId: string | null
                 sendMessage(content)
                 e.currentTarget.reset()
             }} className="flex space-x-2">
+                <CreateExpenseButton chatId={chatId} userId={userId} />
                 <input type="text" name="message" placeholder="Type your message..." className="flex-1 border rounded px-3 py-2" />
                 <button type="submit" className="bg-blue-500 text-white px-4 py-2 rounded">Send</button>
             </form>
