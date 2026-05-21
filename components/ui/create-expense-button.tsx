@@ -1,8 +1,9 @@
 "use client";
 
 import { createClient } from "@/lib/supabase/client";
-import { ReceiptIndianRupee, X } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import type { Html5Qrcode } from "html5-qrcode";
+import { ImageUp, QrCode, ReceiptIndianRupee, X } from "lucide-react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 
 type CreateExpenseButtonProps = {
   chatId: string | null;
@@ -27,6 +28,21 @@ type SplitPreview = {
   amount: number;
 };
 
+type UpiMerchant = {
+  rawUrl: string;
+  upiId: string | null;
+  name: string | null;
+  amount: string | null;
+};
+
+type UpiPaymentParams = {
+  pa: string;
+  pn: string;
+  am: string;
+  cu: string;
+  tn: string;
+};
+
 function buildEqualPercentages(memberIds: string[]) {
   if (memberIds.length === 0) return {};
 
@@ -43,9 +59,16 @@ export default function CreateExpenseButton({
   chatId,
   userId,
 }: CreateExpenseButtonProps) {
+  const scannerElementId = useId().replace(/:/g, "");
+  const scannerRef = useRef<Html5Qrcode | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [open, setOpen] = useState(false);
   const [title, setTitle] = useState("");
   const [amount, setAmount] = useState("");
+  const [upiMerchant, setUpiMerchant] = useState<UpiMerchant | null>(null);
+  const [scanning, setScanning] = useState(false);
+  const [scanningImage, setScanningImage] = useState(false);
+  const [scannerError, setScannerError] = useState<string | null>(null);
   const [members, setMembers] = useState<User[]>([]);
   const [splitPercentages, setSplitPercentages] = useState<Record<string, number>>(
     {},
@@ -123,6 +146,33 @@ export default function CreateExpenseButton({
     fetchMembers();
   }, [chatId, open]);
 
+  const stopScanner = useCallback(async () => {
+    const scanner = scannerRef.current;
+
+    if (!scanner) {
+      setScanning(false);
+      return;
+    }
+
+    try {
+      if (scanner.isScanning) {
+        await scanner.stop();
+      }
+      scanner.clear();
+    } catch (error) {
+      console.error("Error stopping QR scanner:", error);
+    } finally {
+      scannerRef.current = null;
+      setScanning(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      void stopScanner();
+    };
+  }, [stopScanner]);
+
   const parsedAmount = Number(amount);
 
   const splitPreview = useMemo<SplitPreview[]>(() => {
@@ -173,6 +223,17 @@ export default function CreateExpenseButton({
     );
   }, [members, splitPercentages]);
 
+  function encodeUpiParam(value: string) {
+    return encodeURIComponent(value);
+  }
+
+  function buildUpiQuery(params: UpiPaymentParams) {
+    return Object.entries(params)
+      .filter(([, value]) => value.trim().length > 0)
+      .map(([key, value]) => `${key}=${encodeUpiParam(value)}`)
+      .join("&");
+  }
+
   function updateSplitPercentage(memberId: string, value: string) {
     const numericValue = Number(value);
     const nextPercentCents = Math.min(
@@ -200,10 +261,156 @@ export default function CreateExpenseButton({
     });
   }
 
+  function parseUpiQr(decodedText: string) {
+    try {
+      const url = new URL(decodedText);
+      const upiId = url.searchParams.get("pa");
+      const name = url.searchParams.get("pn");
+      const scannedAmount = url.searchParams.get("am");
+
+      if (!upiId && !name && !scannedAmount) {
+        setScannerError("This QR code does not contain UPI payment details.");
+        return;
+      }
+
+      setUpiMerchant({
+        rawUrl: decodedText,
+        upiId,
+        name,
+        amount: scannedAmount,
+      });
+
+      if (name && !title.trim()) {
+        setTitle(name);
+      }
+
+      if (scannedAmount && Number(scannedAmount) > 0) {
+        setAmount(scannedAmount);
+      }
+
+      setScannerError(null);
+      void stopScanner();
+    } catch (error) {
+      console.error("Error parsing UPI QR code:", error);
+      setScannerError("Scanned QR code is not a valid UPI URL.");
+    }
+  }
+
+  async function startScanner() {
+    setScannerError(null);
+
+    try {
+      await stopScanner();
+
+      if (!window.isSecureContext) {
+        setScannerError(
+          "Camera scanning needs HTTPS or localhost. Use Upload QR, or open the app over HTTPS.",
+        );
+        return;
+      }
+
+      if (!navigator.mediaDevices?.getUserMedia) {
+        setScannerError(
+          "Camera streaming is not supported by this browser. Use Upload QR instead.",
+        );
+        return;
+      }
+
+      setScanning(true);
+
+      await new Promise<void>((resolve) => {
+        requestAnimationFrame(() => resolve());
+      });
+
+      const { Html5Qrcode } = await import("html5-qrcode");
+      const scanner = new Html5Qrcode(scannerElementId);
+      scannerRef.current = scanner;
+
+      await scanner.start(
+        { facingMode: "environment" },
+        {
+          fps: 10,
+          qrbox: {
+            width: 240,
+            height: 240,
+          },
+        },
+        (decodedText) => {
+          parseUpiQr(decodedText);
+        },
+        undefined,
+      );
+
+      setScanning(true);
+    } catch (error) {
+      console.error("Error starting QR scanner:", error);
+      scannerRef.current = null;
+      setScanning(false);
+      setScannerError(
+        "Unable to start camera. Use HTTPS/localhost, allow camera permission, or use Upload QR.",
+      );
+    }
+  }
+
+  async function scanQrImage(file: File) {
+    setScannerError(null);
+    setScanningImage(true);
+
+    try {
+      await stopScanner();
+
+      const { Html5Qrcode } = await import("html5-qrcode");
+      const scanner = new Html5Qrcode(scannerElementId);
+      const decodedText = await scanner.scanFile(file, false);
+
+      scanner.clear();
+      parseUpiQr(decodedText);
+    } catch (error) {
+      console.error("Error scanning QR image:", error);
+      setScannerError("Could not read a UPI QR from this image.");
+    } finally {
+      setScanningImage(false);
+
+      if (fileInputRef.current) {
+        fileInputRef.current.value = "";
+      }
+    }
+  }
+
+  function buildUpiPaymentUrl() {
+    if (!upiMerchant?.upiId) return null;
+
+    try {
+      const query = buildUpiQuery({
+        pa: upiMerchant.upiId,
+        pn: upiMerchant.name || "Merchant",
+        am: parsedAmount.toFixed(2),
+        cu: "INR",
+        tn: title.trim() || "Payment",
+      });
+      const isAndroid =
+        typeof navigator !== "undefined" &&
+        /Android/i.test(navigator.userAgent);
+      const paymentUrl = isAndroid
+        ? `intent://pay?${query}#Intent;scheme=upi;end`
+        : `upi://pay?${query}`;
+
+      console.log("Generated UPI payment URL:", paymentUrl);
+
+      return paymentUrl;
+    } catch (error) {
+      console.error("Error building UPI payment URL:", error);
+      return null;
+    }
+  }
+
   function closeModal() {
+    void stopScanner();
     setOpen(false);
     setTitle("");
     setAmount("");
+    setUpiMerchant(null);
+    setScannerError(null);
     setSplitPercentages({});
   }
 
@@ -221,7 +428,7 @@ export default function CreateExpenseButton({
       .insert({
         chat_id: chatId,
         paid_by: userId,
-        title: title.trim() || "Expense",
+        title: title.trim() || upiMerchant?.name || "Expense",
         amount: parsedAmount,
       })
       .select("id")
@@ -250,7 +457,12 @@ export default function CreateExpenseButton({
     }
 
     setSaving(false);
+    const upiPaymentUrl = buildUpiPaymentUrl();
     closeModal();
+
+    if (upiPaymentUrl) {
+      window.location.href = upiPaymentUrl;
+    }
   }
 
   return (
@@ -282,6 +494,90 @@ export default function CreateExpenseButton({
             </div>
 
             <div className="space-y-4">
+              <div className="rounded-xl border p-3">
+                <div className="mb-3 flex items-center justify-between gap-3">
+                  <div className="min-w-0">
+                    <h3 className="text-sm font-medium">UPI QR</h3>
+                    {upiMerchant ? (
+                      <p className="truncate text-xs text-muted-foreground">
+                        Merchant details captured.
+                      </p>
+                    ) : (
+                      <p className="text-xs text-muted-foreground">
+                        Scan a UPI QR to fill payment details.
+                      </p>
+                    )}
+                  </div>
+
+                  <div className="flex shrink-0 gap-2">
+                    <input
+                      ref={fileInputRef}
+                      type="file"
+                      accept="image/*"
+                      className="hidden"
+                      onChange={(event) => {
+                        const file = event.target.files?.[0];
+
+                        if (file) {
+                          void scanQrImage(file);
+                        }
+                      }}
+                    />
+
+                    <button
+                      type="button"
+                      onClick={() => fileInputRef.current?.click()}
+                      disabled={scanningImage}
+                      className="inline-flex items-center gap-2 rounded-xl border px-3 py-2 text-sm hover:bg-muted disabled:opacity-50 transition"
+                    >
+                      <ImageUp size={16} />
+                      {scanningImage ? "Reading" : "Upload"}
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={scanning ? stopScanner : startScanner}
+                      className="inline-flex items-center gap-2 rounded-xl border px-3 py-2 text-sm hover:bg-muted transition"
+                    >
+                      <QrCode size={16} />
+                      {scanning ? "Stop" : "Scan"}
+                    </button>
+                  </div>
+                </div>
+
+                <div
+                  id={scannerElementId}
+                  className={scanning ? "overflow-hidden rounded-xl border" : "hidden"}
+                />
+
+                {scannerError && (
+                  <p className="mt-3 text-sm text-red-500">{scannerError}</p>
+                )}
+
+                {upiMerchant && (
+                  <div className="mt-3 space-y-1 rounded-xl bg-muted p-3 text-sm">
+                    <div className="flex justify-between gap-3">
+                      <span className="text-muted-foreground">UPI ID</span>
+                      <span className="truncate font-medium">
+                        {upiMerchant.upiId || "Not found"}
+                      </span>
+                    </div>
+                    <div className="flex justify-between gap-3">
+                      <span className="text-muted-foreground">Name</span>
+                      <span className="truncate font-medium">
+                        {upiMerchant.name || "Not found"}
+                      </span>
+                    </div>
+                    <div className="flex justify-between gap-3">
+                      <span className="text-muted-foreground">QR Amount</span>
+                      <span className="truncate font-medium">
+                        {upiMerchant.amount || "Not set"}
+                      </span>
+                    </div>
+                  </div>
+                )}
+              </div>
+
               <div>
                 <label className="mb-2 block text-sm font-medium">Title</label>
                 <input
