@@ -3,7 +3,14 @@
 import { createClient } from "@/lib/supabase/client";
 import type { Html5Qrcode } from "html5-qrcode";
 import { ImageUp, QrCode, ReceiptIndianRupee, X } from "lucide-react";
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 
 type CreateExpenseButtonProps = {
   chatId: string | null;
@@ -40,7 +47,8 @@ type UpiPaymentParams = {
   pn: string;
   am: string;
   cu: string;
-  tn: string;
+  tr: string;
+  tid: string;
 };
 
 function buildEqualPercentages(memberIds: string[]) {
@@ -49,10 +57,14 @@ function buildEqualPercentages(memberIds: string[]) {
   const basePercentCents = Math.floor(10000 / memberIds.length);
   const remainder = 10000 % memberIds.length;
 
-  return memberIds.reduce<Record<string, number>>((percentages, memberId, index) => {
-    percentages[memberId] = (basePercentCents + (index < remainder ? 1 : 0)) / 100;
-    return percentages;
-  }, {});
+  return memberIds.reduce<Record<string, number>>(
+    (percentages, memberId, index) => {
+      percentages[memberId] =
+        (basePercentCents + (index < remainder ? 1 : 0)) / 100;
+      return percentages;
+    },
+    {},
+  );
 }
 
 export default function CreateExpenseButton({
@@ -70,9 +82,9 @@ export default function CreateExpenseButton({
   const [scanningImage, setScanningImage] = useState(false);
   const [scannerError, setScannerError] = useState<string | null>(null);
   const [members, setMembers] = useState<User[]>([]);
-  const [splitPercentages, setSplitPercentages] = useState<Record<string, number>>(
-    {},
-  );
+  const [splitPercentages, setSplitPercentages] = useState<
+    Record<string, number>
+  >({});
   const [membersLoading, setMembersLoading] = useState(false);
   const [saving, setSaving] = useState(false);
 
@@ -136,7 +148,7 @@ export default function CreateExpenseButton({
               id: memberId,
               name: null,
               email: null,
-          },
+            },
         ),
       );
       setSplitPercentages(buildEqualPercentages(memberIds));
@@ -178,9 +190,10 @@ export default function CreateExpenseButton({
   const splitPreview = useMemo<SplitPreview[]>(() => {
     if (members.length === 0) return [];
 
-    const totalCents = Number.isFinite(parsedAmount) && parsedAmount > 0
-      ? Math.round(parsedAmount * 100)
-      : 0;
+    const totalCents =
+      Number.isFinite(parsedAmount) && parsedAmount > 0
+        ? Math.round(parsedAmount * 100)
+        : 0;
 
     const splitCents = members.map((member, index) => {
       const percentCents = Math.round((splitPercentages[member.id] || 0) * 100);
@@ -200,7 +213,10 @@ export default function CreateExpenseButton({
     const centsLeft = totalCents - assignedCents;
 
     [...splitCents]
-      .sort((firstSplit, secondSplit) => secondSplit.remainder - firstSplit.remainder)
+      .sort(
+        (firstSplit, secondSplit) =>
+          secondSplit.remainder - firstSplit.remainder,
+      )
       .slice(0, centsLeft)
       .forEach((split) => {
         splitCents[split.index].cents += 1;
@@ -238,7 +254,10 @@ export default function CreateExpenseButton({
     const numericValue = Number(value);
     const nextPercentCents = Math.min(
       10000,
-      Math.max(0, Math.round((Number.isFinite(numericValue) ? numericValue : 0) * 100)),
+      Math.max(
+        0,
+        Math.round((Number.isFinite(numericValue) ? numericValue : 0) * 100),
+      ),
     );
     const otherMembers = members.filter((member) => member.id !== memberId);
 
@@ -248,21 +267,28 @@ export default function CreateExpenseButton({
     }
 
     const remainingPercentCents = 10000 - nextPercentCents;
-    const basePercentCents = Math.floor(remainingPercentCents / otherMembers.length);
+    const basePercentCents = Math.floor(
+      remainingPercentCents / otherMembers.length,
+    );
     const remainder = remainingPercentCents % otherMembers.length;
 
     setSplitPercentages({
       [memberId]: nextPercentCents / 100,
-      ...otherMembers.reduce<Record<string, number>>((percentages, member, index) => {
-        percentages[member.id] =
-          (basePercentCents + (index < remainder ? 1 : 0)) / 100;
-        return percentages;
-      }, {}),
+      ...otherMembers.reduce<Record<string, number>>(
+        (percentages, member, index) => {
+          percentages[member.id] =
+            (basePercentCents + (index < remainder ? 1 : 0)) / 100;
+          return percentages;
+        },
+        {},
+      ),
     });
   }
 
   function parseUpiQr(decodedText: string) {
     try {
+      console.log("Scanned UPI QR payload:", decodedText);
+
       const url = new URL(decodedText);
       const upiId = url.searchParams.get("pa");
       const name = url.searchParams.get("pn");
@@ -381,12 +407,17 @@ export default function CreateExpenseButton({
     if (!upiMerchant?.upiId) return null;
 
     try {
+      const txnId =
+        typeof crypto !== "undefined" && crypto.randomUUID
+          ? crypto.randomUUID()
+          : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
       const query = buildUpiQuery({
         pa: upiMerchant.upiId,
         pn: upiMerchant.name || "Merchant",
         am: parsedAmount.toFixed(2),
         cu: "INR",
-        tn: title.trim() || "Payment",
+        tr: txnId,
+        tid: txnId,
       });
       const isAndroid =
         typeof navigator !== "undefined" &&
@@ -547,7 +578,9 @@ export default function CreateExpenseButton({
 
                 <div
                   id={scannerElementId}
-                  className={scanning ? "overflow-hidden rounded-xl border" : "hidden"}
+                  className={
+                    scanning ? "overflow-hidden rounded-xl border" : "hidden"
+                  }
                 />
 
                 {scannerError && (
@@ -631,7 +664,10 @@ export default function CreateExpenseButton({
                             step="0.01"
                             value={split.percentage.toFixed(2)}
                             onChange={(event) =>
-                              updateSplitPercentage(split.userId, event.target.value)
+                              updateSplitPercentage(
+                                split.userId,
+                                event.target.value,
+                              )
                             }
                             className="w-full rounded-lg border bg-background py-1.5 pl-2 pr-6 text-right text-sm outline-none focus:ring-2 focus:ring-primary"
                           />
